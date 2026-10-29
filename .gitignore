@@ -1,0 +1,10 @@
+# Never pushed: secrets (.local), personal settings, your queue and the per-computer Python environment
+
+.local/
+config.local.json
+data/
+.venv/
+__pycache__/
+*.pyc
+*.tmp
+*.bak

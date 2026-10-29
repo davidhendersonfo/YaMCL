@@ -1,0 +1,304 @@
+{
+  "aggregator_domains": [
+    "bbb.org",
+    "bizapedia.com",
+    "chamberofcommerce.com",
+    "facebook.com",
+    "google.com",
+    "instagram.com",
+    "linkedin.com",
+    "manta.com",
+    "mapquest.com",
+    "nextdoor.com",
+    "opencorporates.com",
+    "yellowpages.com",
+    "yelp.com"
+  ],
+  "claims": {
+    "expire_hours": 24
+  },
+  "csv_filename": "New-to-MCL.csv",
+  "csv_variation_separator": "|",
+  "databricks": {
+    "hostname": "fo-dataresearch-databricks-workspace.cloud.databricks.com",
+    "http_path": "/sql/1.0/warehouses/64785a32f1308f18",
+    "tables": {
+      "mcl": "analysts.mcl.master_table",
+      "denied": "analysts.mcl.denied_new_to_mcl",
+      "honeypot": "analysts.rhenderson.honeypot_callback_lookup",
+      "industry_mapping": "analysts.datatools.industry_mapping",
+      "change_log": "analysts.rhenderson.mcl_change_log",
+      "claims": "analysts.rhenderson.mcl_queue_claims",
+      "handoffs": "analysts.rhenderson.mcl_handoffs"
+    }
+  },
+  "filterable": [
+    "TM",
+    "DC",
+    "NP",
+    "PO"
+  ],
+  "industries": {
+    "Agriculture": {
+      "default_partytypes": [
+        "OB"
+      ]
+    },
+    "Association/Organizations": {
+      "default_partytypes": [
+        "CS",
+        "OB",
+        "TM"
+      ]
+    },
+    "Automotive": {
+      "default_partytypes": [
+        "CS",
+        "EN",
+        "OB"
+      ]
+    },
+    "Business Services": {
+      "default_partytypes": [
+        "CS",
+        "EN",
+        "OB"
+      ]
+    },
+    "Delivery/Shipping": {
+      "default_partytypes": [
+        "CS",
+        "EN",
+        "OB"
+      ]
+    },
+    "Education": {
+      "default_partytypes": [
+        "DC",
+        "EN"
+      ]
+    },
+    "Financial": {
+      "default_partytypes": [
+        "CS",
+        "DC",
+        "OB",
+        "TM"
+      ]
+    },
+    "Government": {
+      "default_partytypes": [
+        "EN",
+        "OB"
+      ]
+    },
+    "Health Care": {
+      "default_partytypes": [
+        "DC",
+        "EN"
+      ]
+    },
+    "Hospitality/Entertainment": {
+      "default_partytypes": [
+        "CS",
+        "EN",
+        "OB",
+        "TM"
+      ]
+    },
+    "Insurance": {
+      "default_partytypes": [
+        "CS",
+        "OB",
+        "TM"
+      ]
+    },
+    "Legal": {
+      "default_partytypes": [
+        "OB"
+      ]
+    },
+    "Manufacturing": {
+      "default_partytypes": [
+        "OB"
+      ]
+    },
+    "Non-Profit": {
+      "default_partytypes": [
+        "NP"
+      ]
+    },
+    "Not Applicable": {
+      "default_partytypes": []
+    },
+    "Other Business": {
+      "default_partytypes": [
+        "CS",
+        "EN",
+        "OB",
+        "PO",
+        "SR",
+        "TM"
+      ]
+    },
+    "Personal Services": {
+      "default_partytypes": [
+        "CS",
+        "EN",
+        "OB"
+      ]
+    },
+    "Prison": {
+      "default_partytypes": [
+        "PR"
+      ]
+    },
+    "Public Service": {
+      "default_partytypes": [
+        "EN",
+        "OB"
+      ]
+    },
+    "Real Estate": {
+      "default_partytypes": [
+        "CS",
+        "OB",
+        "TM"
+      ]
+    },
+    "Religious": {
+      "default_partytypes": [
+        "NP"
+      ]
+    },
+    "Restaurant/Food Services": {
+      "default_partytypes": [
+        "CS",
+        "OB"
+      ]
+    },
+    "Retail": {
+      "default_partytypes": [
+        "CS",
+        "OB"
+      ]
+    },
+    "Technology": {
+      "default_partytypes": [
+        "EN",
+        "OB"
+      ]
+    },
+    "Telecommunications": {
+      "default_partytypes": [
+        "CS",
+        "OB",
+        "SR"
+      ]
+    },
+    "Trade Contractors": {
+      "default_partytypes": [
+        "OB"
+      ]
+    },
+    "Transportation": {
+      "default_partytypes": [
+        "CS",
+        "EN",
+        "OB"
+      ]
+    },
+    "Travel": {
+      "default_partytypes": []
+    },
+    "Unknown Industry": {
+      "default_partytypes": []
+    },
+    "Utilities": {
+      "default_partytypes": [
+        "CS",
+        "DC",
+        "OB",
+        "TM"
+      ]
+    },
+    "Veterinary Services": {
+      "default_partytypes": [
+        "DC",
+        "EN"
+      ]
+    }
+  },
+  "industry_ids": {
+    "Association/Organizations": 48,
+    "Automotive": 12,
+    "Business Services": 17,
+    "Delivery/Shipping": 4,
+    "Education": 1,
+    "Financial": 7,
+    "Government": 5,
+    "Health Care": 6,
+    "Hospitality/Entertainment": 18,
+    "Insurance": 19,
+    "Legal": 10,
+    "Manufacturing": 20,
+    "Non-Profit": 24,
+    "Not Applicable": 29,
+    "Other Business": 21,
+    "Personal Services": 16,
+    "Prison": 27,
+    "Public Service": 8,
+    "Real Estate": 9,
+    "Religious": 13,
+    "Restaurant/Food Services": 11,
+    "Retail": 3,
+    "Technology": 23,
+    "Telecommunications": 22,
+    "Trade Contractors": 15,
+    "Transportation": 2,
+    "Travel": 25,
+    "Unknown Industry": 28,
+    "Utilities": 26,
+    "Veterinary Services": 14
+  },
+  "lnt_base": "https://lnt.fosrv.com",
+  "partytypes": {
+    "CS": "Customer Service",
+    "DC": "Debt Collection",
+    "EN": "Event Notification",
+    "NP": "Non-Profit",
+    "OB": "Multi-Use Line",
+    "PN": "Personal Number",
+    "PO": "Political",
+    "PR": "Prison",
+    "SR": "Survey",
+    "TM": "Telemarketing"
+  },
+  "publish": {
+    "sandbox_schema": "analysts.rhenderson"
+  },
+  "timezone": "America/Chicago",
+  "upload_allowed_partytypes": [
+    "CS",
+    "DC",
+    "EN",
+    "NP",
+    "PO",
+    "SR",
+    "TM",
+    "OB",
+    "PR",
+    "UB",
+    "S2"
+  ],
+  "team": [
+    {
+      "name": "David",
+      "email": "rhenderson@firstorion.com"
+    },
+    {
+      "name": "Michael",
+      "email": "miwamura@firstorion.com"
+    }
+  ]
+}

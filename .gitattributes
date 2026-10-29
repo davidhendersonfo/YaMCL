@@ -1,0 +1,8 @@
+# Keep Windows line endings on the files Windows runs or opens in Notepad
+*.bat text eol=crlf
+*.txt text eol=crlf
+# Everything else: normalise
+* text=auto
+*.png binary
+*.ico binary
+*.xlsx binary

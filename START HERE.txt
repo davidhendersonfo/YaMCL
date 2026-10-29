@@ -1,0 +1,96 @@
+YaMCL - GETTING STARTED
+=======================
+Yet another MCL tool (say "yam-cull"), YaLnT's little sibling.
+
+A local web app for working through the New-to-MCL queue: it loads names from Databricks,
+shows the LNT caller info, honeypot transcripts and similar MCL entries for each one, and
+publishes what you approve straight to the MCL. Nothing leaves your computer except
+queries to Databricks and the LNT, made with your own logins.
+
+
+1. FIRST-TIME SETUP (once)
+--------------------------
+  a. Install Git for Windows (ask IT if it's blocked). The first time you pull, it opens
+     a browser to sign you in to the repo; after that it remembers you.
+  b. Get the app from the repo into a permanent folder, e.g. in a Command Prompt:
+        git clone <repo URL from David> "%USERPROFILE%\Documents\YaMCL"
+     (or GitHub Desktop: File > Clone repository).
+     No git? You can still unzip a copy from David instead; it just won't update itself.
+  c. Double-click  Setup.bat
+     It installs Python 3.13 if needed (alongside any other version you have) and
+     everything the app uses. Takes a minute or two.
+     If it says Python isn't installed: install "Python Install Manager" from the
+     Microsoft Store, then run Setup.bat again.
+
+
+2. EVERY DAY
+------------
+  Double-click  StartServer.bat
+  Your browser opens http://127.0.0.1:5050 (refresh if it opened before the app was ready).
+  Leave the black window open while you work; closing it stops the app.
+  It checks for a new version first and installs it, so restarting the app is how you update.
+
+
+3. CONNECT DATABRICKS (first run)
+---------------------------------
+  Click "Connect Databricks" (top bar) or "Load the queue from Databricks".
+  A Databricks sign-in page opens in your browser. Sign in with your own account and
+  come back. Your sign-in is remembered in the .local folder (keep that folder private).
+
+  Before you can load a queue, David needs to give your Databricks login access to the
+  shared tables (the GRANT lines in README.md). Send him the exact email you sign in with.
+
+
+4. LNT BRIDGE (for caller info and the website button)
+------------------------------------------------------
+  a. Install the Tampermonkey extension in Chrome or Edge.
+  b. With the app running, open  http://127.0.0.1:5050/static/lnt-bridge.user.js
+     and click Install (or use the "Install bridge" button in the app's LNT panel).
+  c. Reload the app. Stay logged in to the LNT in the same browser.
+     If Tampermonkey asks about lnt.fosrv.com, choose "Always allow domain".
+
+
+5. BEFORE YOU PUBLISH FOR REAL
+------------------------------
+  The app starts in DRY RUN mode: you can review everything and preview/test publishing,
+  but nothing is written to the MCL.
+  - Approve a few rows, open "Publish to MCL", and click "Test on a copy of the MCL".
+  - When that passes, turn dry run off in Settings (gear icon) -> Publishing.
+  - Optional: in the same tab, turn on "Publish when I approve or deny" so each approval
+    goes out on its own after a 10-second undo window.
+
+
+UPDATING
+--------
+  Automatic: StartServer.bat pulls the latest version each time it starts.
+  If it says "your local changes would be overwritten", an app file was edited on your
+  computer. Send David that window, or in a Command Prompt in the app folder run
+     git status            (shows the edited file)
+     git checkout -- FILE  (puts it back)
+  then start the app again.
+  Your own settings (Settings, anything tagged "just you"), your Databricks sign-in and
+  your queue are never touched by updates.
+
+
+GOOD TO KNOW
+------------
+  - Settings > Team: set "Pass flagged rows to" to the person you usually hand off to.
+  - The badge next to "Databricks connected" shows the publishing mode: Dry run, Batch
+    publish or Auto-publish. Click it to change.
+  - If your filters can't fill the number you ask for, the app looks further back on its
+    own (up to a year by default, Settings -> Connections). Those names are tagged OLDER.
+  - Something not loading (Stats, say)? Settings -> Connections -> Check my access shows
+    which tables your login can't read, with Databricks' exact message.
+  - Press ? in the app for keyboard shortcuts (A approve, D deny, F flag, J/K next/back,
+    T call the number, V open LNT verification).
+  - Names you load are reserved for you so nobody else gets them. "Release" gives one back.
+  - Stuck on one? Flag it (F) and pass it on with Ctrl+Enter, or press H to hand it over with a note. It shows up
+    under "For you" in their top bar, and they can finish it or send it back with a reply.
+  - The MCL editor (top bar switch) is for fixing existing MCL entries and the denied list;
+    "Add to MCL" adds a brand-new entry by hand.
+    Every change asks for a reason and is logged.
+  - README.md has the full details.
+  - Updating to a new version: replace everything EXCEPT the .venv, .local and data folders
+    (and config.json if you've changed settings), then restart StartServer.bat.
+
+Questions or errors: send a screenshot of the error to David.

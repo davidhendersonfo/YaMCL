@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>YaMCL</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍠</text></svg>">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v=v) }}">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand" title="YaMCL: yet another MCL (tool). Say it like yam-sicle, or don't."><span class="brand-yam" aria-hidden="true">🍠</span> YaMCL <span id="filename" class="muted"></span></div>
+    <nav class="mode-tabs" id="mode-tabs" hidden>
+      <button data-mode="review" class="on">Review queue</button>
+      <button data-mode="editor">MCL editor</button>
+      <button data-mode="add">Add to MCL</button>
+      <button data-mode="stats">Stats</button>
+    </nav>
+    <div class="progress-wrap" id="progress-wrap" hidden>
+      <div class="progress"><div id="progress-bar"></div></div>
+      <span id="progress-text" class="muted"></span>
+    </div>
+    <button class="db-pill" id="db-pill" hidden></button>
+    <button class="mode-badge" id="mode-badge" hidden title="How Publish works right now. Click to change it in Settings → Publishing."></button>
+    <span class="others muted small" id="others" hidden></span>
+    <div class="inbox" id="inbox" hidden>
+      <button class="btn inbox-btn" id="inbox-btn"></button>
+      <div class="menu-list inbox-list" id="inbox-list" hidden></div>
+    </div>
+    <div class="top-actions" id="top-actions" hidden>
+      <span id="save-state" class="muted"></span>
+      <button class="btn primary" id="btn-publish" hidden>Publish to MCL</button>
+      <a class="btn primary export-link" id="exp-approved" href="/export/csv?scope=approved"
+         title="New-to-MCL upload CSV with only the rows you approved">Export approved CSV</a>
+      <details class="menu" id="export-menu">
+        <summary class="btn" id="export-summary">More exports ▾</summary>
+        <div class="menu-list">
+          <a class="export-link" id="exp-approved-menu" href="/export/csv?scope=approved">
+            <b>Approved only</b><span id="exp-approved-note" class="muted small">New-to-MCL CSV for the batch notebook</span></a>
+          <a class="export-link" id="exp-all" href="/export/csv?scope=all">
+            <b>All except denied</b><span id="exp-all-note" class="muted small"></span></a>
+          <a class="export-link" id="exp-denied" href="/export/csv?scope=denied">
+            <b>Denied only</b><span class="muted small">Same CSV format, saved as New-to-MCL-denied.csv</span></a>
+          <a class="export-link" href="/export/xlsx?scope=everything">
+            <b>Review copy (.xlsx)</b><span class="muted small">Every row and column, edits highlighted</span></a>
+        </div>
+      </details>
+      <button class="btn ghost" id="btn-new-file">Load new file</button>
+    </div>
+    <button class="btn ghost icon cog" id="btn-settings" title="Settings and keyboard shortcuts" aria-label="Settings">
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19.4 13a7.5 7.5 0 0 0 0-2l2-1.6a.5.5 0 0 0 .1-.6l-1.9-3.3a.5.5 0 0 0-.6-.2l-2.4 1a7.3 7.3 0 0 0-1.7-1l-.4-2.6a.5.5 0 0 0-.5-.4h-3.8a.5.5 0 0 0-.5.4l-.4 2.6a7.3 7.3 0 0 0-1.7 1l-2.4-1a.5.5 0 0 0-.6.2L2.5 8.8a.5.5 0 0 0 .1.6L4.6 11a7.5 7.5 0 0 0 0 2l-2 1.6a.5.5 0 0 0-.1.6l1.9 3.3a.5.5 0 0 0 .6.2l2.4-1c.5.4 1.1.7 1.7 1l.4 2.6a.5.5 0 0 0 .5.4h3.8a.5.5 0 0 0 .5-.4l.4-2.6c.6-.3 1.2-.6 1.7-1l2.4 1a.5.5 0 0 0 .6-.2l1.9-3.3a.5.5 0 0 0-.1-.6L19.4 13ZM12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z"/></svg>
+    </button>
+  </header>
+
+  <!-- Upload view -->
+  <main id="upload-view" class="upload-view" hidden>
+    <div class="dropzone" id="dropzone">
+      <h2>Drop the New-To-MCL spreadsheet here</h2>
+      <p class="muted">.xlsx or .csv with phoneNumbers, createdBys, partyName, name_variations, industry, partytypes, Notes</p>
+      <label class="btn primary">Choose file<input type="file" id="file-input" accept=".xlsx,.xlsm,.csv" hidden></label>
+      <div class="db-load" id="db-load" hidden>
+        <div class="or"><span>or</span></div>
+        <details class="qf" id="qf">
+          <summary><b>Filters</b> <span class="muted small" id="qf-summary">none: everything unclaimed from the last 60 days</span></summary>
+          <div class="qf-body">
+            <div class="qf-field qf-wide">
+              <label>Industries <button type="button" class="link-btn" id="qf-ind-clear">clear</button></label>
+              <div class="code-toggles" id="qf-industries"></div>
+            </div>
+            <div class="qf-grid">
+              <label class="qf-field">Name contains
+                <input id="qf-name" placeholder="e.g. dental" autocomplete="off"></label>
+              <label class="qf-field">Entered by
+                <input id="qf-by" placeholder="LNT usernames, e.g. sramirez, awise" autocomplete="off" spellcheck="false"></label>
+              <label class="qf-field">Look back (days)
+                <input id="qf-days" type="number" min="1" max="4400" value="60"></label>
+              <label class="qf-field">Seen at least (times)
+                <input id="qf-seen" type="number" min="1" max="1000" value="1"></label>
+              <label class="qf-field">Order
+                <select id="qf-order">
+                  <option value="any">Any (fastest)</option>
+                  <option value="most_seen">Most seen first</option>
+                  <option value="newest">Newest first</option>
+                  <option value="az">A to Z</option>
+                </select></label>
+              <div class="qf-field qf-count">
+                <button type="button" class="btn" id="qf-count-btn">Count matches</button>
+                <span class="muted small" id="qf-count"></span>
+              </div>
+            </div>
+            <button type="button" class="link-btn" id="qf-reset">Reset filters</button>
+          </div>
+        </details>
+        <div class="db-load-row">
+          <button class="btn primary" id="btn-db-queue">Load the queue from Databricks</button>
+          <label class="muted small">up to <input id="db-limit" type="number" min="1" max="5000" value="1023"> names</label>
+        </div>
+        <p class="muted small" id="db-load-status"></p>
+      </div>
+      <p class="muted small" id="upload-warning" hidden>Loading a new file replaces your current progress. Export first if you need it.</p>
+      <button class="btn ghost" id="btn-cancel-upload" hidden>Back to current file</button>
+    </div>
+  </main>
+
+  <!-- Work view -->
+  <div id="work-view" class="work-view" hidden>
+    <aside class="queue">
+      <div class="filters" id="filters"></div>
+      <input id="queue-search" class="queue-search" placeholder="Search name or number…">
+      <ol id="queue-list" class="queue-list"></ol>
+    </aside>
+    <main class="entity" id="entity"></main>
+  </div>
+
+  <!-- MCL editor -->
+  <div id="editor-view" class="work-view" hidden>
+    <aside class="queue">
+      <div class="seg" id="ed-seg">
+        <button data-e-table="mcl" class="on">MCL</button>
+        <button data-e-table="denied">Denied list</button>
+      </div>
+      <input id="ed-search" class="queue-search" placeholder="Search names and variations…" autocomplete="off">
+      <ol id="ed-results" class="queue-list"></ol>
+    </aside>
+    <main class="entity" id="ed-main"></main>
+  </div>
+
+  <!-- Stats -->
+  <main id="stats-view" class="add-view" hidden></main>
+
+  <!-- Add to MCL -->
+  <main id="add-view" class="add-view" hidden></main>
+
+  <div id="settings" class="modal" hidden>
+    <div class="modal-card settings-card" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <div class="settings-head">
+        <h3 id="settings-title">Settings <span class="muted small" id="settings-version"></span></h3>
+        <button class="btn ghost icon" data-set="close" aria-label="Close">✕</button>
+      </div>
+      <nav class="set-tabs" id="set-tabs">
+        <button data-tab="industries">Industries</button>
+        <button data-tab="partytypes">Party types</button>
+        <button data-tab="checks">Checks &amp; export</button>
+        <button data-tab="connections">Connections</button>
+        <button data-tab="publishing">Publishing</button>
+        <button data-tab="team">Team</button>
+        <button data-tab="json">Raw JSON</button>
+        <button data-tab="shortcuts">Shortcuts</button>
+      </nav>
+      <div class="set-body" id="set-body"></div>
+      <div class="set-pane" id="set-shortcuts" hidden>
+      <table class="shortcuts">
+        <tr><td><kbd>A</kbd> or <kbd>Ctrl</kbd>+<kbd>Enter</kbd></td><td>Approve &amp; go to next pending</td></tr>
+        <tr><td><kbd>F</kbd></td><td>Flag for a second look</td></tr>
+        <tr><td><kbd>D</kbd></td><td>Deny</td></tr>
+        <tr><td><kbd>U</kbd></td><td>Set back to pending</td></tr>
+        <tr><td><kbd>H</kbd></td><td>Ask someone (hand the row to a teammate)</td></tr>
+        <tr><td><kbd>J</kbd> / <kbd>→</kbd></td><td>Next row</td></tr>
+        <tr><td><kbd>K</kbd> / <kbd>←</kbd></td><td>Previous row</td></tr>
+        <tr><td><kbd>W</kbd></td><td>Open the website from the LNT caller</td></tr>
+        <tr><td><kbd>R</kbd></td><td>Reload LNT caller info</td></tr>
+        <tr><td><kbd>T</kbd></td><td>Call the number (RingCentral)</td></tr>
+        <tr><td><kbd>C</kbd></td><td>Copy phone number</td></tr>
+        <tr><td><kbd>V</kbd></td><td>Open this number's LNT verification history</td></tr>
+        <tr><td><kbd>L</kbd></td><td>LNT caller search by name</td></tr>
+        <tr><td><kbd>G</kbd> / <kbd>P</kbd></td><td>Google the name / the number</td></tr>
+        <tr><td><kbd>N</kbd></td><td>Edit party name</td></tr>
+        <tr><td><kbd>Esc</kbd></td><td>Leave a text field (so shortcuts work)</td></tr>
+        <tr><td><kbd>?</kbd></td><td>Open this list</td></tr>
+      </table>
+      </div>
+      <footer class="set-foot" id="set-foot">
+        <span class="set-msg" id="set-msg"></span>
+        <button class="btn ghost" data-set="discard">Discard changes</button>
+        <button class="btn primary" data-set="save">Save</button>
+      </footer>
+    </div>
+  </div>
+
+  <div id="publish" class="modal" hidden>
+    <div class="modal-card settings-card" role="dialog" aria-modal="true" aria-labelledby="publish-title">
+      <div class="settings-head">
+        <h3 id="publish-title">Publish to the MCL</h3>
+        <button class="btn ghost icon" data-pub="close" aria-label="Close">✕</button>
+      </div>
+      <div class="set-body" id="pub-body"></div>
+      <footer class="set-foot">
+        <span class="set-msg" id="pub-msg"></span>
+        <button class="btn ghost" data-pub="preview">Refresh preview</button>
+        <button class="btn" data-pub="test">Test on a copy of the MCL</button>
+        <button class="btn primary" data-pub="run">Publish</button>
+      </footer>
+    </div>
+  </div>
+
+  <div id="handoff" class="modal" hidden>
+    <div class="modal-card handoff-card" role="dialog" aria-modal="true" aria-labelledby="ho-title">
+      <h3 id="ho-title">Ask someone</h3>
+      <p class="muted small" id="ho-sub"></p>
+      <label class="ho-field">To
+        <input id="ho-to" list="ho-people" placeholder="name@firstorion.com" autocomplete="off" spellcheck="false">
+        <datalist id="ho-people"></datalist></label>
+      <label class="ho-field">Note
+        <textarea id="ho-note" rows="4" placeholder="What do you need? e.g. not sure if this is Health Care or Personal Services"></textarea></label>
+      <p class="muted small">Your edits travel with it, and it leaves your queue until it comes back.</p>
+      <div class="ho-actions">
+        <button class="btn ghost" data-ho="cancel">Cancel</button>
+        <button class="btn primary" data-ho="send">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toasts" class="toasts"></div>
+  <script src="{{ url_for('static', filename='app.js', v=v) }}"></script>
+  <script src="{{ url_for('static', filename='settings.js', v=v) }}"></script>
+  <script src="{{ url_for('static', filename='publish.js', v=v) }}"></script>
+  <script src="{{ url_for('static', filename='editor.js', v=v) }}"></script>
+  <script src="{{ url_for('static', filename='add.js', v=v) }}"></script>
+  <script src="{{ url_for('static', filename='stats.js', v=v) }}"></script>
+  <script src="{{ url_for('static', filename='handoff.js', v=v) }}"></script>
+</body>
+</html>
