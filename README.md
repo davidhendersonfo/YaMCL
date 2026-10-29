@@ -31,7 +31,7 @@ What's shared and what isn't:
 | | `data/` (your queue, edits and publish log), `.venv/` |
 
 **Personal settings** (tagged *just you* in Settings) are saved to `config.local.json`: dry run, auto-publish
-and its undo window, who flagged rows go to, offering a handoff when you flag, looking further back and how far,
+and its undo window, whose turn your new tickets start as, offering a ticket when you flag, looking further back and how far,
 background preloading, the token file, and whether you maintain the shared settings.
 
 **Shared settings** are read-only in Settings unless you tick **I maintain the shared settings** (Settings → Team).
@@ -68,7 +68,7 @@ Change the files (or unzip a new version over the folder), bump `VERSION` if you
    (or use GitHub Desktop's Clone).
 3. Optional: copy the `.local` folder from his old install into the new folder to keep his Databricks sign-in.
 4. Double-click **Setup.bat** once, then **StartServer.bat** as usual.
-5. Settings → Team → **Pass flagged rows to**: David.
+5. Settings → Team → **Give new tickets' turn to**: David.
 
 If an update ever says "your local changes would be overwritten", an app file was edited on that computer.
 `git status` shows which; `git checkout -- <file>` puts it back (or `git stash` to keep a copy), then restart.
@@ -164,34 +164,47 @@ the app tops your queue up from what's still free). The top bar shows what other
 
 1. He installs the app from the repo (see "Michael's install" above) and signs in to Databricks with his own login.
    He gets the same `config.json` table settings automatically.
-2. The shared tables are created the first time they're used: load a queue once (claims and handoffs tables)
+2. The shared tables are created the first time they're used: load a queue once (claims and ticket tables)
    and publish once (change log). Then grant him access. In a Databricks SQL editor, with his Databricks login in the backticks:
 
 ```sql
 GRANT USE SCHEMA, CREATE TABLE ON SCHEMA analysts.rhenderson TO `his.login@company.com`;  -- CREATE TABLE is for his test copies
 GRANT SELECT, MODIFY ON TABLE analysts.rhenderson.mcl_queue_claims TO `his.login@company.com`;
 GRANT SELECT, MODIFY ON TABLE analysts.rhenderson.mcl_change_log TO `his.login@company.com`;
-GRANT SELECT, MODIFY ON TABLE analysts.rhenderson.mcl_handoffs TO `his.login@company.com`;
+GRANT SELECT, MODIFY ON TABLE analysts.rhenderson.mcl_tickets TO `his.login@company.com`;
+GRANT SELECT, MODIFY ON TABLE analysts.rhenderson.mcl_ticket_events TO `his.login@company.com`;
 ```
 
 He also needs what the batch notebook already needed: write access to the MCL and denied tables, and read
 access to `v_pnvl_history` and the industry mapping. Test copies are per person
 (`..._sandbox_mcl_rhenderson`, `..._sandbox_mcl_mmiwamura`), so you can both test at once.
 
-### Asking a teammate (handoffs)
+### Tickets (working a caller out together)
 
-Flagging a row (`F`) offers this straight away: a "Pass it to someone?" box with your last teammate filled in.
-`Ctrl+Enter` sends it (the note is optional), `Esc` keeps it as a plain flag. Turn the prompt off in
-Settings → Publishing ("When I flag a row, offer to pass it to a teammate").
+A caller you're unsure about becomes a **ticket**: its own conversation on a shared **Tickets** board that everyone
+on the Team list (Settings → Team) can see, with a log of every change and **whose turn** it is.
 
-**Ask…** (bottom bar, or `H`) hands the current row to a teammate with a note: "not sure if this is Health Care or
-Personal Services". Your edits travel with it, it moves to your Done tab ("Handed to miwamura"), and nobody else
-can pull that name into their queue while it's out.
+- **Making one:** flag a row (`F`) and the "Make it a ticket" box opens (turn this off in Settings → Team), or press
+  **Ticket…** / `H`. Pick whose turn it is (your usual person is filled in) and add a note. The row leaves your
+  queue (it's under Done with a 🎫 tag), and nobody else can pull that name into a queue while the ticket is open.
+- **The board** (Tickets tab): *Your turn*, *Updated* (someone posted on a ticket you've been part of since you last
+  looked), *All open* and *Resolved* (the last 60 days; search finds older ones). The tab shows a count, and a
+  message pops up when a ticket lands on your plate. It checks every minute.
+- **Talking:** post from the board or from the review screen. Each post can pass the turn (back to whoever spoke to
+  you last, by default), take it yourself, or leave it where it is ("just a note").
+- **Working it:** **Open in review** puts the row in your review screen with the conversation on top, so you have the
+  LNT info, honeypot and MCL search. Edit as usual; your changes are logged on the ticket ("Michael changed party
+  types: CS, EN, OB → CS, OB") when you post. Only whoever has the turn can change the row; anyone can add notes,
+  and **Take the turn** is one click. If someone changes the ticket while you're editing your copy, posting your
+  edits is refused and you're offered their version, so nobody silently overwrites anyone.
+- **Finishing:** approve or deny it in review (that's noted on the ticket and the turn stays with you), then publish
+  as usual: publishing resolves the ticket ("Added to the MCL"). Or, from the board, **Send back to the pool**
+  (anyone can pick the name up in a queue load) or **Close, nothing to do**. Those two can be reopened.
+- **History:** resolved tickets keep their whole conversation, so "how did we classify that, and why?" is a search away.
 
-The other person sees **📨 1 for you** in the top bar (it checks every couple of minutes). Opening it drops the
-row into their queue with your edits and the note thread on top. They can finish it like any row (approve or deny,
-then publish) or **Reply / send back**, which sends it back to whoever sent it, with their answer. Publishing a
-handed-off row closes the handoff with a "Finished" note. Everything lives in `analysts.rhenderson.mcl_handoffs`.
+Tickets live in `analysts.rhenderson.mcl_tickets` and `mcl_ticket_events` (one row per note, edit or turn change, so
+two people posting at once never collide). Both are created automatically. Open handoffs from the old "Ask someone"
+become tickets on first use, conversations included.
 
 ## MCL editor
 
@@ -334,7 +347,7 @@ See "Keeping everyone up to date" above.
 - **Party types:** codes, labels, which are Call Guard blockable (warned) and which the upload allows (others are errors).
 - **Checks & export:** export file name, variation separator, listing sites.
 - **Connections:** LNT address, background preloading, Databricks workspace, warehouse, token file and table names.
-- **Team:** the team list (names and Databricks logins, offered first when you pass a row on), who your flagged
-  rows go to by default, claims, and the "I maintain the shared settings" switch. Also shows your version.
+- **Team:** the team list (names and Databricks logins: who you can give a ticket's turn to), whose turn new tickets
+  start as, the ticket and claims tables, and the "I maintain the shared settings" switch. Also shows your version.
 - **Raw JSON:** everything (shared and personal together), for anything else.
 - **Shortcuts:** the keyboard list (also opened with `?`).

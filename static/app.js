@@ -78,7 +78,10 @@ function fieldChanged(row, k) {
 }
 const isChanged = row => EDIT_FIELDS.some(k => fieldChanged(row, k));
 const cur = () => S.rows[S.idx];
-const isDone = r => !!(r.published || r.released || r.handed_off);
+const isDone = r => !!(r.published || r.released || r.ticketed || (r.ticket?.closed && !r.published));
+// a ticket row you've opened in review, while it's someone else's turn: look, add notes, but don't change it
+const ticketLocked = r => !!(r?.ticket && r.ticket.status === 'open' && r.ticket.turn && S.me && r.ticket.turn !== S.me);
+const readOnly = r => isDone(r) || ticketLocked(r);
 
 async function copyText(text, label) {
   try {
@@ -1055,8 +1058,9 @@ function queueItemHTML(r) {
     ${S.autoBusy[r.id] ? '<span class="q-wait">publishing…</span>'
       : S.autoQ[r.id] ? '<span class="q-wait" title="Waiting out the undo window">queued</span>'
       : r.publish_error ? '<span class="q-err" title="Couldn\'t publish">!</span>'
-      : r.handed_off ? `<span class="q-rel" title="Handed to ${esc(r.handed_off.to)}">→ ${esc(r.handed_off.to)}</span>`
-      : r.handoff && !r.published ? `<span class="q-ho" title="Handed to you by ${esc(r.handoff.from)}">from ${esc(lastSender(r))}</span>`
+      : r.ticketed ? `<span class="q-rel" title="A ticket now: ${esc(r.ticketed.to)}'s turn when it was made">🎫 ${esc(r.ticketed.to)}</span>`
+      : r.ticket && !r.published && !r.released ? (ticketLocked(r) ? `<span class="q-rel" title="Ticket: ${esc(r.ticket.turn_name)}'s turn">🎫 ${esc(r.ticket.turn_name)}</span>`
+        : '<span class="q-ho" title="Ticket: your turn">🎫 your turn</span>')
       : r.released ? '<span class="q-rel" title="Released for someone else">released</span>'
       : r.published ? '<span class="q-pub" title="Published to Databricks">✓ MCL</span>'
       : (isChanged(r) ? '<span class="q-edit" title="Edited">✎</span>' : '')}
@@ -1093,29 +1097,20 @@ function fitPhones(row) {
   }
 }
 
-function lastSender(row) {
-  const t = row.handoff?.thread || [];
-  return t.length ? t[t.length - 1].by : row.handoff?.from;
-}
-
-function threadHTML(thread) {
-  return `<ul class="ho-thread">${thread.map(m => `<li class="${m.kind === 'done' ? 'done' : ''}"><b>${esc(m.by)}</b>
-    <span class="muted small">${esc(String(m.at || '').replace('T', ' ').slice(0, 16))}${m.to ? ` → ${esc(m.to)}` : ''}</span>
-    <div>${esc(m.text)}</div></li>`).join('')}</ul>`;
-}
-
 function publishedBanner(row) {
-  if (row.handed_off) {
-    return `<div class="published-banner released">Handed to <b>${esc(row.handed_off.to)}</b> ·
-      ${esc(String(row.handed_off.at || '').replace('T', ' ').slice(0, 16))}: “${esc(row.handed_off.note)}”.
-      It comes back to your "For you" list if they send it back.</div>`;
+  if (row.ticketed) {
+    return `<div class="published-banner released">🎫 This is a ticket now (${esc(String(row.ticketed.at || '').replace('T', ' ').slice(0, 16))},
+      ${esc(row.ticketed.to)}'s turn): “${esc(row.ticketed.note)}”.
+      <button class="link-btn" data-tk="board" data-tk-id="${esc(row.ticketed.id)}">Open the ticket</button></div>`;
   }
-  const handoffNote = row.handoff && !row.published ? `<div class="ho-banner">
-      <div class="ho-banner-head"><span>Handed to you by <b>${esc(row.handoff.from)}</b></span>
-        <button class="btn" data-act="handoff">Reply / send back <kbd>H</kbd></button></div>
-      ${threadHTML(row.handoff.thread || [])}
-      <div class="muted small">Approve or deny as usual to finish it, or send it back with a reply.</div></div>` : '';
-  return handoffNote + publishedBannerInner(row);
+  if (row.ticket?.closed && !row.published) {
+    const what = { added: 'added to the MCL', merged: 'merged into an MCL entry', denied: 'added to the denied list',
+      'up to date': 'already up to date', released: 'sent back to the pool', closed: 'closed without changes' }[row.ticket.closed] || 'resolved';
+    return `<div class="published-banner released">🎫 This ticket was ${what}${row.ticket.resolved_by ? ` by ${esc(row.ticket.resolved_by)}` : ''}, so there's nothing left to do here.
+      <button class="link-btn" data-tk="board" data-tk-id="${esc(row.ticket.id)}">Open the ticket</button></div>`;
+  }
+  const ticket = row.ticket && !row.published && !row.released && window.ticketBannerHTML ? window.ticketBannerHTML(row) : '';
+  return ticket + publishedBannerInner(row);
 }
 
 function publishedBannerInner(row) {
@@ -1177,7 +1172,7 @@ function renderEntity() {
     </div>
 
     <div class="grid">
-      <fieldset class="form" ${isDone(row) ? 'disabled' : ''}>
+      <fieldset class="form" ${readOnly(row) ? 'disabled' : ''}>
         <div class="field">
           <label for="f-name">Party name</label>
           <input id="f-name" autocomplete="off" spellcheck="false">
@@ -1226,11 +1221,12 @@ function renderEntity() {
     <footer class="actionbar">
       <button class="btn ghost" data-act="prev">← Prev <kbd>K</kbd></button>
       <div class="spacer"></div>
-      ${S.claimBatch && !isDone(row) && !row.handoff ? '<button class="btn ghost" data-act="release" title="Give this name back so someone else can work it">Release</button>' : ''}
-      ${dbOn() && !isDone(row) && !row.handoff ? '<button class="btn ghost" data-act="handoff" title="Hand this row to a teammate with a note">Ask… <kbd>H</kbd></button>' : ''}
-      <button class="btn flag" data-act="flagged" ${isDone(row) ? 'disabled' : ''}>Flag <kbd>F</kbd></button>
-      <button class="btn deny" data-act="denied" ${isDone(row) ? 'disabled' : ''}>Deny <kbd>D</kbd></button>
-      <button class="btn primary" data-act="approved" ${isDone(row) ? 'disabled' : ''}>Approve <kbd>A</kbd></button>
+      ${S.claimBatch && !isDone(row) && !row.ticket ? '<button class="btn ghost" data-act="release" title="Give this name back so someone else can work it">Release</button>' : ''}
+      ${dbOn() && !isDone(row) && !row.ticket ? '<button class="btn ghost" data-act="handoff" title="Make this row a ticket on the shared board, with a note">Ticket… <kbd>H</kbd></button>' : ''}
+      ${row.ticket && !isDone(row) ? '<button class="btn ghost" data-act="handoff" title="Write on the ticket">Reply <kbd>H</kbd></button>' : ''}
+      <button class="btn flag" data-act="flagged" ${readOnly(row) || row.ticket ? 'disabled' : ''}>Flag <kbd>F</kbd></button>
+      <button class="btn deny" data-act="denied" ${readOnly(row) ? 'disabled' : ''}>Deny <kbd>D</kbd></button>
+      <button class="btn primary" data-act="approved" ${readOnly(row) ? 'disabled' : ''}>Approve <kbd>A</kbd></button>
       <div class="spacer"></div>
       <button class="btn ghost" data-act="next">Next → <kbd>J</kbd></button>
     </footer>`;
@@ -1246,6 +1242,7 @@ function renderEntity() {
   loadMcl(row);
   checkNameInDb(row);
   loadHoneypot(row);
+  if (row.ticket && !isDone(row)) window.loadTicketForRow?.(row);
   const inflight = S.lntInflight[row.id];
   if (inflight) inflight.then(() => prefetchNext(row)); else prefetchNext(row);
 }
@@ -1417,7 +1414,9 @@ function step(delta) {
 
 function setStatus(status) {
   const row = cur();
-  if (isDone(row)) return toast(row.released ? 'This row was released, so its status is locked.' : 'This row is already published, so its status is locked.', 'error');
+  if (isDone(row)) return toast(row.ticketed ? 'This row is a ticket now: work it on the Tickets board.' : row.released ? 'This row was released, so its status is locked.' : 'This row is already published, so its status is locked.', 'error');
+  if (ticketLocked(row)) return toast(`It's ${row.ticket.turn_name}'s turn on this ticket. Take the turn to decide it.`, 'error');
+  if (row.ticket && status === 'flagged') return window.focusTicketComposer?.();
   if (S.autoBusy[row.id]) return toast('That row is publishing right now.', 'error');
   const previous = row.status;
   cancelAutoPublish(row);
@@ -1426,6 +1425,7 @@ function setStatus(status) {
   scheduleSave(row, true);
   if ((status === 'approved' || status === 'denied') && autoPublishOn()) queueAutoPublish(row, previous);
   if (status === 'flagged' && previous !== 'flagged') setTimeout(() => window.offerOnFlag?.(row), 0);
+  if (row.ticket && status !== previous) window.ticketDecision?.(row, status);
   renderFilters();
   refresh();
   if (status === 'pending') {
@@ -1524,7 +1524,8 @@ function act(name) {
     case 'release': return releaseRow(row);
     case 'handoff':
       if (isDone(row)) return toast('This row is finished here.', 'error');
-      if (!dbOn()) return toast('Connect Databricks to hand rows to a teammate', 'error');
+      if (!dbOn()) return toast('Connect Databricks to use tickets', 'error');
+      if (row.ticket) return window.focusTicketComposer?.();
       return openHandoff(row);
     case 'phones-toggle':
       S.phonesOpen[row.id] = !S.phonesOpen[row.id];

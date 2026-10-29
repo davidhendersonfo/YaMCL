@@ -74,7 +74,7 @@ UPDATING
 
 GOOD TO KNOW
 ------------
-  - Settings > Team: set "Pass flagged rows to" to the person you usually hand off to.
+  - Settings > Team: set "Give new tickets' turn to" to the person you usually ask.
   - The badge next to "Databricks connected" shows the publishing mode: Dry run, Batch
     publish or Auto-publish. Click it to change.
   - If your filters can't fill the number you ask for, the app looks further back on its
@@ -84,8 +84,10 @@ GOOD TO KNOW
   - Press ? in the app for keyboard shortcuts (A approve, D deny, F flag, J/K next/back,
     T call the number, V open LNT verification).
   - Names you load are reserved for you so nobody else gets them. "Release" gives one back.
-  - Stuck on one? Flag it (F) and pass it on with Ctrl+Enter, or press H to hand it over with a note. It shows up
-    under "For you" in their top bar, and they can finish it or send it back with a reply.
+  - Stuck on one? Flag it (F) or press H to make it a TICKET: it goes on the shared Tickets board
+    with your note, and it's your teammate's turn. Talk it through there, pass the turn back and
+    forth, and whoever finishes it approves or denies and publishes as usual. The Tickets tab shows
+    a number when something is your turn or has been updated.
   - The MCL editor (top bar switch) is for fixing existing MCL entries and the denied list;
     "Add to MCL" adds a brand-new entry by hand.
     Every change asks for a reason and is logged.

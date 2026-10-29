@@ -349,7 +349,7 @@ function teamHTML() {
   const m = SET.meta;
   return `
     <h4>Team</h4>
-    <p class="muted small">The people who share the queue. They're offered first when you pass a row on, by name.
+    <p class="muted small">The people who share the queue and the Tickets board. They're who you can hand a ticket's turn to.
       Use the email each person signs in to Databricks with.</p>
     <table class="team-table">
       <tr><th>Name</th><th>Databricks login</th><th></th></tr>
@@ -360,17 +360,26 @@ function teamHTML() {
     </table>
     <div class="set-tools"><button class="btn" data-s-act="add-member">+ Add someone</button></div>
 
-    <h4>Passing rows on</h4>
+    <h4>Tickets</h4>
     <label class="set-check"><input type="checkbox" data-s-path="handoff_on_flag" ${d.handoff_on_flag !== false ? 'checked' : ''}>
-      When I flag a row, offer to pass it to a teammate</label>
+      When I flag a row, offer to make it a ticket</label>
     <div class="set-field">
-      <label>Pass flagged rows to</label>
+      <label>Give new tickets' turn to</label>
       <select data-s-path="handoff_default">
         <option value="">Whoever I sent one to last</option>
         ${team.filter(p => p.email).map(p => `<option value="${esc(p.email)}" ${d.handoff_default === p.email ? 'selected' : ''}>${esc(p.name || p.email)} (${esc(p.email)})</option>`).join('')}
         ${d.handoff_default && !team.some(p => p.email === d.handoff_default) ? `<option value="${esc(d.handoff_default)}" selected>${esc(d.handoff_default)}</option>` : ''}
       </select>
-      <p class="muted small">Filled in when the "Pass it to someone?" box opens. You can still change it each time.</p>
+      <p class="muted small">Filled in when the "Make it a ticket" box opens. You can still change it each time.</p>
+    </div>
+    <div class="set-field">
+      <label>Tickets table</label>
+      <input class="mono" data-s-path="databricks.tables.tickets" value="${esc(t.tickets || '')}" spellcheck="false">
+    </div>
+    <div class="set-field">
+      <label>Ticket conversations table</label>
+      <input class="mono" data-s-path="databricks.tables.ticket_events" value="${esc(t.ticket_events || '')}" spellcheck="false">
+      <p class="muted small">Both are created automatically. Everyone on the team must point at the same tables.</p>
     </div>
 
     <h4>Claims</h4>

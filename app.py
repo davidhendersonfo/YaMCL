@@ -329,7 +329,15 @@ def load_state():
     if not os.path.exists(STATE_FILE):
         return {"filename": None, "rows": [], "header_map": {}}
     with open(STATE_FILE, encoding="utf-8") as f:
-        return json.load(f)
+        state = json.load(f)
+    for r in state.get("rows") or []:  # rows from the old "Ask someone" handoffs (their ids carried over to tickets)
+        if r.get("handed_off"):
+            h = r.pop("handed_off")
+            r["ticketed"] = {"id": h.get("id"), "at": h.get("at"), "to": h.get("to"), "note": h.get("note")}
+        if r.get("handoff"):
+            h = r.pop("handoff")
+            r["ticket"] = {"id": h.get("id"), "version": -1, "turn": None, "status": "open"}
+    return state
 
 
 def save_state(state):
@@ -412,8 +420,13 @@ def update_row(row_id):
             return jsonify(error="This row is already published to Databricks, so it can't be changed here."), 409
         if row.get("released"):
             return jsonify(error="This row was released for someone else to pick up, so it can't be changed here."), 409
-        if row.get("handed_off"):
-            return jsonify(error="This row was handed to someone else, so it can't be changed here."), 409
+        if row.get("ticketed"):
+            return jsonify(error="This row is a ticket now, so change it on the ticket."), 409
+        tk = row.get("ticket") or {}
+        if tk and ("current" in payload or payload.get("status") in ("approved", "denied")) \
+                and tk.get("status") == "open" and tk.get("turn") and tk.get("turn") != DB.whoami():
+            return jsonify(error=f"It's {tk.get('turn_name') or short_user(tk.get('turn'))}'s turn on this ticket. "
+                                 "Take the turn to change it."), 409
         if "current" in payload or "status" in payload:
             row.pop("publish_error", None)
         if "current" in payload:
@@ -444,6 +457,8 @@ DEFAULT_TABLES = {
     "change_log": "analysts.rhenderson.mcl_change_log",
     "claims": "analysts.rhenderson.mcl_queue_claims",
     "handoffs": "analysts.rhenderson.mcl_handoffs",
+    "tickets": "analysts.rhenderson.mcl_tickets",
+    "ticket_events": "analysts.rhenderson.mcl_ticket_events",
 }
 
 
@@ -763,10 +778,13 @@ def finish_publish(plan, result):
         save_state(state)
     result["state_rows"] = state["rows"]
     for r in state["rows"]:
-        if r["id"] in done and r.get("handoff"):
-            err = close_handoff(r["handoff"]["id"], f"Finished: {HANDOFF_DONE.get(done[r['id']]['action'], 'published')}")
+        if r["id"] in done and r.get("ticket"):
+            it = done[r["id"]]
+            res = RESOLUTIONS.get(it["action"], "added")
+            where = f" as “{it['target']}”" if it.get("target") and it["action"] == "merge" else ""
+            err = resolve_ticket(r["ticket"]["id"], res, RESOLUTION_TEXT.get(res, "Published") + where)
             if err:
-                result["warnings"].append(f"Published, but couldn't close the handoff ({err}).")
+                result["warnings"].append(f"Published, but couldn't resolve the ticket ({err}).")
     if state.get("claim_batch") and done:
         err = set_claims("done", [r["original"]["partyName"] for r in state["rows"] if r["id"] in done])
         if err:
@@ -961,54 +979,292 @@ def editor_delete():
     return jsonify(res)
 
 
-# ---------------------------------------------------------------- handoffs ("Ask someone")
+# ---------------------------------------------------------------- tickets
+# A flagged or "ask someone" row becomes a ticket on the shared board. Whoever has the turn acts next;
+# anyone on the team can add a note. Edits made while working a ticket are logged as events when you post,
+# and the ticket closes itself when its row is published (or someone sends it back to the pool).
 
 EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
-HANDOFF_DONE = {"insert": "added to the MCL", "merge": "merged into an existing MCL entry",
-                "deny": "added to the denied list", "skip": "already up to date"}
-_handoff_lock = threading.Lock()
+RESOLUTIONS = {"insert": "added", "merge": "merged", "deny": "denied", "skip": "up to date"}
+RESOLUTION_TEXT = {"added": "Added to the MCL", "merged": "Merged into an existing MCL entry", "denied": "Added to the denied list",
+                   "up to date": "Already up to date in the MCL", "released": "Sent back to the pool",
+                   "closed": "Closed without changes"}
+TICKET_SEEN_FILE = os.path.join(DATA_DIR, "ticket_seen.json")
+_ticket_lock = threading.Lock()
+EDIT_FIELDS = (("partyName", "name"), ("industry", "industry"), ("partyTypes", "party types"),
+               ("name_variations", "variations"), ("notes", "notes"))
 
 
 def _now():
     return datetime.now().isoformat(timespec="seconds")
 
 
-def _handoff(hid):
-    rows = DB.query_file("handoff_get", [hid], handoffs_table=tbl("handoffs"))
-    if not rows:
-        return None
-    h = dict(rows[0])
-    h["row"] = json.loads(h.get("row_json") or "{}")
-    h["thread"] = json.loads(h.get("thread_json") or "[]")
-    return h
+def ticket_fmt():
+    return {"tickets_table": tbl("tickets"), "ticket_events_table": tbl("ticket_events")}
 
 
-def _save_handoff(h, assignee, status):
-    DB.write_file("handoff_update", [assignee, status, json.dumps(h["row"]), json.dumps(h["thread"]), h["handoff_id"]],
-                  handoffs_table=tbl("handoffs"))
+def team_names():
+    return {m["email"]: m.get("name") or short_user(m["email"]) for m in load_config().get("team") or [] if m.get("email")}
 
 
-def close_handoff(hid, text):
-    """Mark a handoff done once its row is published. Best effort: returns an error message or None."""
+def person(email, names=None):
+    names = team_names() if names is None else names
+    return names.get(email) or short_user(email)
+
+
+def _event_id(i=0):
+    return f"{datetime.now():%Y%m%d%H%M%S%f}-{i:02d}-{uuid.uuid4().hex[:4]}"
+
+
+def add_events(ticket_id, events, by=None):
+    """events: [{kind, text, data, at?}]. Written in one insert, in order."""
+    by = by or DB.whoami()
+    # times are written by the app in local time (Databricks' current_timestamp() would be UTC), so they read right
+    payload = [{"ticket_id": ticket_id, "event_id": e.get("event_id") or _event_id(i), "at": e.get("at") or _now(),
+                "by_user": e.get("by") or by, "kind": e["kind"], "text": e.get("text") or "",
+                "data_json": json.dumps(e.get("data") or {})} for i, e in enumerate(events)]
+    if payload:
+        DB.write_file("ticket_events_insert", [json.dumps(payload)], **ticket_fmt())
+
+
+def _ticket_row(r):
+    t = dict(r)
+    t["row"] = json.loads(t.get("row_json") or "{}")
+    t["phone_numbers"] = to_list(t.get("phone_numbers"))
+    t["version"] = int(t.get("version") or 0)
+    for k in ("created_at", "updated_at", "resolved_at"):
+        t[k] = cell_str(t.get(k)).replace(" ", "T")[:19] or None
+    return t
+
+
+def get_ticket(tid):
+    rows = DB.query_file("tickets_get", [tid], **ticket_fmt())
+    return _ticket_row(rows[0]) if rows else None
+
+
+def ticket_events(ids):
+    if not ids:
+        return {}
+    out = {}
+    for r in DB.query_file("ticket_events_for", [json.dumps(list(ids))], **ticket_fmt()):
+        e = {"id": cell_str(r.get("event_id")), "at": cell_str(r.get("at")).replace(" ", "T")[:19],
+             "by": cell_str(r.get("by_user")), "kind": cell_str(r.get("kind")), "text": cell_str(r.get("text")),
+             "data": json.loads(cell_str(r.get("data_json")) or "{}")}
+        out.setdefault(cell_str(r.get("ticket_id")), []).append(e)
+    for evs in out.values():
+        evs.sort(key=lambda e: (e["at"], e["id"]))
+    return out
+
+
+def update_ticket(t, *, status=None, turn=_MISSING, resolution=_MISSING, resolved=False, row=None):
+    """Version-checked update. Raises TicketConflict if someone changed it first."""
+    me = DB.whoami()
+    new_status = status or t["status"]
+    new_turn = t.get("turn") if turn is _MISSING else turn
+    new_res = t.get("resolution") if resolution is _MISSING else resolution
+    resolved_by = me if resolved else (None if new_status == "open" else t.get("resolved_by"))
+    DB.write_file("tickets_update", [new_status, new_turn, new_res, resolved_by, bool(resolved),
+                                     json.dumps(row) if row is not None else None, t["ticket_id"], t["version"]],
+                  **ticket_fmt())
+    after = get_ticket(t["ticket_id"])
+    if not after or after["version"] != t["version"] + 1 or after.get("updated_by") != me:
+        raise TicketConflict()
+    return after
+
+
+class TicketConflict(Exception):
+    pass
+
+
+def load_seen():
     try:
-        with _handoff_lock:
-            h = _handoff(hid)
-            if not h or h.get("status") == "done":
+        with open(TICKET_SEEN_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def mark_seen(tid, event_id):
+    """Remember the last event of this ticket you've seen (event ids sort in time order)."""
+    seen = load_seen()
+    seen[tid] = max(event_id or "", seen.get(tid) or "")
+    os.makedirs(DATA_DIR, exist_ok=True)
+    write_json(TICKET_SEEN_FILE, seen)
+
+
+def ticket_summary(t, events, me, names, seen):
+    evs = events or []
+    last = evs[-1] if evs else {}
+    talk = [e for e in evs if e["kind"] in ("opened", "note", "decision", "resolved", "reopened")]
+    last_talk = talk[-1] if talk else last
+    participants = list(dict.fromkeys([t.get("created_by")] + [e["by"] for e in evs if e["by"]]))
+    cur = (t["row"] or {}).get("current") or {}
+    others_after = [e for e in evs if e["by"] != me and e["id"] > (seen.get(t["ticket_id"]) or "")]
+    your_turn = t["status"] == "open" and t.get("turn") == me
+    return {
+        "id": t["ticket_id"], "partyname": cell_str(t.get("partyname")), "phones": t["phone_numbers"],
+        "status": t["status"], "resolution": t.get("resolution"), "version": t["version"],
+        "turn": t.get("turn"), "turn_name": person(t.get("turn"), names) if t.get("turn") else None,
+        "your_turn": your_turn, "created_by": person(t.get("created_by"), names), "created_at": t.get("created_at"),
+        "updated_at": t.get("updated_at"), "resolved_by": person(t.get("resolved_by"), names) if t.get("resolved_by") else None,
+        "participants": [person(p, names) for p in participants if p],
+        "involved": me in participants,
+        "unread": bool(others_after) and me in participants,  # someone else did something since you last looked
+        "count": len(talk),
+        "last": {"by": person(last_talk.get("by"), names), "kind": last_talk.get("kind"), "text": last_talk.get("text"),
+                 "at": last_talk.get("at")} if last_talk else None,
+        "proposed": {"partyName": cur.get("partyName"), "industry": cur.get("industry"), "partyTypes": cur.get("partyTypes") or []},
+    }
+
+
+def _event_out(e, names):
+    return {**e, "name": person(e["by"], names)}
+
+
+def ticket_detail(tid, mark=True):
+    t = get_ticket(tid)
+    if not t:
+        return None
+    me = DB.whoami()
+    names = team_names()
+    evs = ticket_events([tid]).get(tid, [])
+    seen = load_seen()
+    out = ticket_summary(t, evs, me, names, seen)
+    if mark and evs:
+        mark_seen(tid, evs[-1]["id"])
+    out["unread_since"] = seen.get(tid)
+    state = sync_working_copy(tid, t)
+    wc = next((r for r in state.get("rows") or [] if (r.get("ticket") or {}).get("id") == tid), None)
+    out["working_copy"] = {"row_id": wc["id"], "ticket": wc["ticket"], "current": wc["current"]} if wc else None
+    out["events"] = [_event_out(e, names) for e in evs]
+    out["row"] = t["row"]
+    out["me"] = me
+    return out
+
+
+_migrated = False
+
+
+def ensure_tickets():
+    """Create the ticket tables on first use, and move any open handoffs from the old "Ask someone" over once."""
+    global _migrated
+    ensure_claims()
+    if _migrated:
+        return
+    _migrated = True
+    try:
+        old = DB.query_file("handoff_open", handoffs_table=tbl("handoffs"))
+    except Exception:  # noqa: BLE001 - no old handoffs table: nothing to move
+        return
+    for h in old:
+        hid = cell_str(h.get("handoff_id"))
+        try:
+            if get_ticket(hid):
+                continue
+            row = json.loads(cell_str(h.get("row_json")) or "{}")
+            phones = to_list((row.get("original") or {}).get("phoneNumbers"))
+            DB.write_file("tickets_insert", [hid, cell_str(h.get("partyname")), json.dumps(phones),
+                                             cell_str(h.get("from_user")), cell_str(h.get("assignee")), json.dumps(row)],
+                          **ticket_fmt())
+            thread = json.loads(cell_str(h.get("thread_json")) or "[]")
+            add_events(hid, [{"kind": "opened" if i == 0 else "note", "text": m.get("text"), "by": m.get("email") or cell_str(h.get("from_user")),
+                              "at": m.get("at"), "data": {"to": m.get("to")}} for i, m in enumerate(thread)])
+        except Exception as e:  # noqa: BLE001
+            print("Couldn't move handoff", hid, "to tickets:", e)
+
+
+def _state_row(state, row_id):
+    rows = state["rows"]
+    return rows[row_id] if isinstance(row_id, int) and 0 <= row_id < len(rows) else None
+
+
+def _row_values(row):
+    return {"original": row["original"], "current": row["current"]}
+
+
+def edit_events(before, after):
+    """Field-by-field changes between two versions of a row's current values."""
+    out = []
+    for key, label in EDIT_FIELDS:
+        b, a = before.get(key), after.get(key)
+        if isinstance(b, list) or isinstance(a, list):
+            b, a = list(b or []), list(a or [])
+            if b == a:
+                continue
+            if key == "name_variations":
+                added = [x for x in a if x not in b]
+                removed = [x for x in b if x not in a]
+                text = "; ".join(filter(None, [f"added {', '.join(added)}" if added else "",
+                                               f"removed {', '.join(removed)}" if removed else ""]))
+            else:
+                text = f"{', '.join(b) or '(none)'} → {', '.join(a) or '(none)'}"
+        else:
+            if (b or "") == (a or ""):
+                continue
+            text = f"{b or '(blank)'} → {a or '(blank)'}" if key != "notes" else "updated the notes"
+        out.append({"kind": "edit", "text": f"changed {label}: {text}", "data": {"field": key, "before": before.get(key), "after": after.get(key)}})
+    return out
+
+
+def ticket_info(t, base):
+    return {"id": t["ticket_id"], "version": t["version"], "turn": t.get("turn"), "status": t["status"],
+            "turn_name": person(t.get("turn")) if t.get("turn") else None, "base": base}
+
+
+def sync_working_copy(tid, t, take_theirs=False):
+    """Keep my local working copy of a ticket in step with the ticket. If someone else changed the row and I
+    haven't edited my copy, take their version; if I have, keep mine and mark it stale (posting edits is then refused)."""
+    if not t:
+        return load_state()
+    with _lock:
+        state = load_state()
+        changed = False
+        for r in state.get("rows") or []:
+            tk = r.get("ticket") or {}
+            if tk.get("id") != tid:
+                continue
+            theirs = clean_current((t["row"] or {}).get("current") or r["current"])
+            if tk.get("version") == t["version"] and not take_theirs:
+                r["ticket"] = {**ticket_info(t, tk.get("base")), "stale": tk.get("stale", False)}
+            elif take_theirs or r["current"] == tk.get("base") or theirs == r["current"]:
+                r["current"] = theirs
+                r["ticket"] = ticket_info(t, theirs)
+            else:
+                r["ticket"] = {**tk, "stale": True, "turn": t.get("turn"), "status": t["status"],
+                               "turn_name": person(t.get("turn")) if t.get("turn") else None}
+            if t["status"] != "open":  # finished by someone: my copy is done too
+                r["ticket"]["closed"] = t.get("resolution") or "closed"
+                r["ticket"]["resolved_by"] = person(t.get("resolved_by")) if t.get("resolved_by") else None
+            changed = True
+        if changed:
+            save_state(state)
+        return state
+
+
+def resolve_ticket(tid, resolution, text=""):
+    """Resolve after a publish, or on request. Best effort for the publish path: returns an error message or None."""
+    try:
+        ensure_tickets()
+        with _ticket_lock:
+            t = get_ticket(tid)
+            if not t or t["status"] != "open":
                 return None
-            me = DB.whoami()
-            h["thread"].append({"by": short_user(me), "email": me, "at": _now(), "text": text, "kind": "done"})
-            _save_handoff(h, me, "done")
+            add_events(tid, [{"kind": "resolved", "text": text or RESOLUTION_TEXT.get(resolution, resolution),
+                              "data": {"resolution": resolution}}])
+            t = update_ticket(t, status="resolved", turn=None, resolution=resolution, resolved=True)
+        mark_seen(tid, _event_id(99))
+        sync_working_copy(tid, t)
         return None
     except Exception as e:  # noqa: BLE001
-        print("Couldn't close handoff:", e)
+        print("Couldn't resolve ticket:", e)
         return str(e)
 
 
-def handoff_summary(h):
-    last = h["thread"][-1] if h["thread"] else {}
-    return {"id": h["handoff_id"], "partyname": cell_str(h.get("partyname")), "from": short_user(h.get("from_user")),
-            "last_by": last.get("by"), "last_text": last.get("text"), "updated": cell_str(h.get("updated_at"))[:16],
-            "count": len(h["thread"])}
+def ticket_error(e):
+    if isinstance(e, TicketConflict):
+        return jsonify(error="Someone else changed this ticket while you were editing, so your edits weren't shared. "
+                             "Load their version (your edits are dropped) and redo them, or post just a note.", conflict=True), 409
+    return db_error(e)
 
 
 @app.get("/api/handoff/people")
@@ -1025,100 +1281,239 @@ def handoff_people():
         return db_error(e)
     people.discard(me)
     return jsonify(people=sorted((p for p in people if EMAIL_RE.match(p)), key=lambda p: (p not in names, p)),
-                   names=names, default=cfg.get("handoff_default") or "")
+                   names=names, default=cfg.get("handoff_default") or "", me=me)
 
 
-@app.get("/api/handoff/inbox")
-def handoff_inbox():
+@app.get("/api/tickets")
+def tickets_list():
+    q = collapse(request.args.get("q", "")).lower()[:100]
+    pat = "%" + re.sub(r"([%_\\])", r"\\\1", q) + "%" if q else ""
     try:
-        ensure_claims()
-        rows = DB.query_file("handoff_inbox", handoffs_table=tbl("handoffs"))
+        ensure_tickets()
+        rows = [_ticket_row(r) for r in DB.query_file("tickets_list", [pat, pat], resolved_days=60, **ticket_fmt())]
+        evs = ticket_events([t["ticket_id"] for t in rows])
+        me = DB.whoami()
     except Exception as e:  # noqa: BLE001
         return db_error(e)
-    out = []
-    for r in rows:
-        h = dict(r)
-        h["thread"] = json.loads(h.get("thread_json") or "[]")
-        out.append(handoff_summary(h))
-    return jsonify(items=out)
+    names, seen = team_names(), load_seen()
+    items = [ticket_summary(t, evs.get(t["ticket_id"]), me, names, seen) for t in rows]
+    if q:
+        items = [i for i in items if q in i["partyname"].lower()
+                 or any(q in (p or "") for p in i["phones"]) or q in (i["proposed"].get("partyName") or "").lower()]
+    counts = {"your_turn": sum(1 for i in items if i["your_turn"]),
+              "updated": sum(1 for i in items if i["unread"] and not i["your_turn"]),
+              "open": sum(1 for i in items if i["status"] == "open")}
+    return jsonify(items=items, counts=counts, me=me, me_name=person(me, names))
 
 
-@app.post("/api/handoff/send")
-def handoff_send():
-    """Hand a row to someone (or send a handed-to-me row back / on). It leaves my queue."""
+@app.get("/api/tickets/<tid>")
+def ticket_get(tid):
+    try:
+        ensure_tickets()
+        t = ticket_detail(tid)
+    except Exception as e:  # noqa: BLE001
+        return db_error(e)
+    if not t:
+        return jsonify(error="That ticket doesn't exist (any more)."), 404
+    return jsonify(t)
+
+
+@app.post("/api/tickets")
+def ticket_create():
+    """Turn a row in my queue into a ticket on the board. It leaves my queue; the turn goes to `to`."""
     b = request.get_json(silent=True) or {}
-    note = collapse(b.get("note", ""))[:2000] or ("Flagged for a second look." if b.get("flag") else "")
+    note = str(b.get("note") or "").strip()[:4000] or ("Flagged for a second look." if b.get("flag") else "")
     to = str(b.get("to") or "").strip().lower()
-    if not note:
-        return jsonify(error="Add a note so they know what you need."), 400
     with _lock:
         state = load_state()
-        rows = state["rows"]
-        row = rows[b.get("row_id")] if isinstance(b.get("row_id"), int) and 0 <= b["row_id"] < len(rows) else None
-    if not row or row.get("published") or row.get("released") or row.get("handed_off"):
-        return jsonify(error="That row is finished here, so it can't be handed off."), 400
+        row = _state_row(state, b.get("row_id"))
+    if not row or row.get("published") or row.get("released") or row.get("ticketed"):
+        return jsonify(error="That row is finished here, so it can't become a ticket."), 400
+    if row.get("ticket"):
+        return jsonify(error="That row is already a ticket. Post on it instead."), 400
+    if not note:
+        return jsonify(error="Add a note so they know what you need."), 400
     try:
-        ensure_claims()
+        ensure_tickets()
         me = DB.whoami()
-        with _handoff_lock:
-            existing = _handoff(row["handoff"]["id"]) if row.get("handoff") else None
-            if existing and existing.get("status") == "open":
-                if not to:  # "send back": to whoever sent it to me last
-                    to = next((t.get("email") for t in reversed(existing["thread"]) if t.get("email") and t["email"] != me),
-                              existing.get("from_user"))
-                hid = existing["handoff_id"]
-                existing["row"] = {"original": row["original"], "current": row["current"]}
-                existing["thread"].append({"by": short_user(me), "email": me, "at": _now(), "text": note, "to": short_user(to)})
-                if not EMAIL_RE.match(to or "") or to == me:
-                    return jsonify(error="Pick who to send it to."), 400
-                _save_handoff(existing, to, "open")
-            else:
-                if not EMAIL_RE.match(to) or to == me:
-                    return jsonify(error="Pick a teammate's email to send it to."), 400
-                hid = uuid.uuid4().hex[:12]
-                thread = [{"by": short_user(me), "email": me, "at": _now(), "text": note, "to": short_user(to)}]
-                DB.write_file("handoff_insert", [hid, collapse(row["original"]["partyName"]), to,
-                                                 json.dumps({"original": row["original"], "current": row["current"]}),
-                                                 json.dumps(thread)], handoffs_table=tbl("handoffs"))
+        if not EMAIL_RE.match(to) or to == me:
+            return jsonify(error="Pick a teammate to hand the turn to."), 400
+        tid = uuid.uuid4().hex[:12]
+        DB.write_file("tickets_insert", [tid, collapse(row["original"]["partyName"]), json.dumps(row["original"]["phoneNumbers"]),
+                                         me, to, json.dumps(_row_values(row))], **ticket_fmt())
+        edits = edit_events(row["original"], row["current"])
+        add_events(tid, [{"kind": "opened", "text": note, "data": {"to": to}}]
+                   + ([{**e, "text": e["text"] + " (before the ticket)"} for e in edits] if edits else []))
     except Exception as e:  # noqa: BLE001
         return db_error(e)
-    if state.get("claim_batch") and not row.get("handoff"):
-        set_claims("handed_off", [row["original"]["partyName"]])  # the open handoff keeps it out of everyone's queue
+    mark_seen(tid, _event_id(99))
+    if state.get("claim_batch"):
+        set_claims("handed_off", [row["original"]["partyName"]])  # the open ticket keeps it out of everyone's queue
     with _lock:
         state = load_state()
         r = state["rows"][row["id"]]
-        r["handed_off"] = {"to": short_user(to), "at": _now(), "id": hid, "note": note}
+        r["ticketed"] = {"id": tid, "at": _now(), "to": person(to), "note": note}
         r["status"] = "flagged"
         save_state(state)
-    return jsonify(row=r)
+    return jsonify(row=r, ticket_id=tid)
 
 
-@app.post("/api/handoff/take")
-def handoff_take():
-    """Pull a handoff from my inbox into my queue, with the sender's edits and notes."""
-    hid = (request.get_json(silent=True) or {}).get("id", "")
+@app.post("/api/tickets/<tid>/post")
+def ticket_post(tid):
+    """A note or reply, optionally passing the turn, sharing my edits from the working copy, or recording
+    my approve/deny decision."""
+    b = request.get_json(silent=True) or {}
+    text = str(b.get("text") or "").strip()[:4000]
+    pass_to = str(b.get("pass_to") or "").strip().lower()
+    decision = b.get("decision") if b.get("decision") in ("approved", "denied", "pending", "flagged") else None
     try:
-        h = _handoff(hid)
+        ensure_tickets()
         me = DB.whoami()
+        with _ticket_lock:
+            t = get_ticket(tid)
+            if not t:
+                return jsonify(error="That ticket doesn't exist (any more)."), 404
+            if t["status"] != "open":
+                return jsonify(error="That ticket is resolved. Reopen it to keep going."), 409
+            events, new_row = [], None
+            with _lock:
+                state = load_state()
+                row = next((r for r in state.get("rows") or [] if (r.get("ticket") or {}).get("id") == tid), None)
+            if row is not None:
+                edits = edit_events((t["row"].get("current") or {}), row["current"])
+                if edits:
+                    if t.get("turn") != me:
+                        return jsonify(error=f"It's {person(t.get('turn'))}'s turn, so your edits can't be shared. "
+                                             "Take the turn first (or undo the edits and just post a note)."), 403
+                    if (row.get("ticket") or {}).get("version") != t["version"] or (row.get("ticket") or {}).get("stale"):
+                        raise TicketConflict()
+                    events += edits
+                    new_row = _row_values(row)
+            if pass_to and pass_to != t.get("turn") and not EMAIL_RE.match(pass_to):
+                return jsonify(error="Pick who to pass the turn to."), 400
+            new_turn = pass_to or t.get("turn")
+            if decision:
+                cur = (new_row or t["row"]).get("current") or {}
+                summary = {"approved": f"approved it: {cur.get('industry') or 'no industry'} · {', '.join(cur.get('partyTypes') or []) or 'no party types'}",
+                           "denied": "denied it", "pending": "set it back to pending", "flagged": "flagged it"}[decision]
+                events.append({"kind": "decision", "text": summary + (". " + text if text else ""), "data": {"status": decision}})
+                if decision in ("approved", "denied"):
+                    new_turn = me  # you finish it: it goes out with your next publish
+            elif text:
+                events.append({"kind": "note", "text": text, "data": {"to": pass_to} if pass_to and pass_to != t.get("turn") else {}})
+            if pass_to and pass_to != t.get("turn") and not text and not decision:
+                events.append({"kind": "turn", "text": f"passed the turn to {person(pass_to)}" if pass_to != me else "took the turn",
+                               "data": {"to": pass_to}})
+            if not events:
+                return jsonify(error="Write a note, or pick who to pass the turn to."), 400
+            add_events(tid, events)
+            shared = new_row is not None
+            if new_turn != t.get("turn") or new_row is not None:
+                t = update_ticket(t, turn=new_turn, row=new_row)
+            else:
+                t = update_ticket(t)  # bump the version so everyone's view knows something happened
+    except TicketConflict as e:
+        sync_working_copy(tid, get_ticket(tid))
+        return ticket_error(e)
+    except Exception as e:  # noqa: BLE001
+        return ticket_error(e)
+    state = sync_working_copy(tid, t, take_theirs=shared)  # what I just shared is now the ticket's version
+    return jsonify(ticket=ticket_detail(tid), rows=state.get("rows"))
+
+
+@app.post("/api/tickets/<tid>/take")
+def ticket_take(tid):
+    try:
+        ensure_tickets()
+        me = DB.whoami()
+        with _ticket_lock:
+            t = get_ticket(tid)
+            if not t or t["status"] != "open":
+                return jsonify(error="That ticket isn't open."), 409
+            if t.get("turn") != me:
+                add_events(tid, [{"kind": "turn", "text": "took the turn", "data": {"to": me, "from": t.get("turn")}}])
+                t = update_ticket(t, turn=me)
+    except Exception as e:  # noqa: BLE001
+        return ticket_error(e)
+    state = sync_working_copy(tid, t)
+    return jsonify(ticket=ticket_detail(tid), rows=state.get("rows"))
+
+
+@app.post("/api/tickets/<tid>/resolve")
+def ticket_resolve(tid):
+    """Send it back to the pool, or close it with nothing to do."""
+    b = request.get_json(silent=True) or {}
+    res = b.get("resolution") if b.get("resolution") in ("released", "closed") else None
+    if not res:
+        return jsonify(error="Pick how to resolve it."), 400
+    text = str(b.get("text") or "").strip()[:4000]
+    err = resolve_ticket(tid, res, RESOLUTION_TEXT[res] + (f": {text}" if text else ""))
+    if err:
+        return jsonify(error=f"Couldn't resolve the ticket: {err}"), 502
+    # Released: the name is back in the pool as soon as the ticket isn't open (its claim is already "handed off").
+    with _lock:
+        state = load_state()
+        for r in state.get("rows") or []:
+            if (r.get("ticket") or {}).get("id") == tid and not r.get("published"):
+                r["released"] = {"at": _now(), "via": "ticket"}
+        save_state(state)
+    return jsonify(ticket=ticket_detail(tid), rows=state.get("rows"))
+
+
+@app.post("/api/tickets/<tid>/reopen")
+def ticket_reopen(tid):
+    try:
+        ensure_tickets()
+        me = DB.whoami()
+        with _ticket_lock:
+            t = get_ticket(tid)
+            if not t or t["status"] == "open":
+                return jsonify(error="That ticket is already open."), 409
+            if t.get("resolution") not in ("released", "closed"):
+                return jsonify(error="That one was published. Change the MCL entry in the MCL editor instead."), 409
+            add_events(tid, [{"kind": "reopened", "text": str((request.get_json(silent=True) or {}).get("text") or "").strip()[:4000] or "reopened it"}])
+            t = update_ticket(t, status="open", turn=me, resolution=None)
+    except Exception as e:  # noqa: BLE001
+        return ticket_error(e)
+    return jsonify(ticket=ticket_detail(tid))
+
+
+@app.post("/api/tickets/<tid>/work")
+def ticket_work(tid):
+    """Open a ticket's row in my review queue to research and edit it (edits are shared when I post)."""
+    try:
+        ensure_tickets()
+        t = get_ticket(tid)
     except Exception as e:  # noqa: BLE001
         return db_error(e)
-    if not h or h.get("status") != "open" or h.get("assignee") != me:
-        return jsonify(error="That handoff isn't waiting on you any more."), 409
-    info = {"id": hid, "from": short_user(h.get("from_user")), "thread": h["thread"]}
+    if not t:
+        return jsonify(error="That ticket doesn't exist (any more)."), 404
+    if t["status"] != "open":
+        return jsonify(error="That ticket is resolved. Reopen it first."), 409
+    discard = bool((request.get_json(silent=True) or {}).get("discard"))
+    theirs = clean_current(t["row"].get("current") or {}) if t["row"].get("current") else None
     with _lock:
         state = load_state()
         if not state.get("rows"):
-            state = {"filename": "Handed to me", "uploaded_at": _now(), "header_map": {}, "rows": []}
-        row = next((r for r in state["rows"]
-                    if (r.get("handoff") or {}).get("id") == hid or (r.get("handed_off") or {}).get("id") == hid), None)
+            state = {"filename": "Tickets", "uploaded_at": _now(), "header_map": {}, "rows": []}
+        row = next((r for r in state["rows"] if (r.get("ticket") or {}).get("id") == tid
+                    or (r.get("ticketed") or {}).get("id") == tid), None)
         if row is None:
-            row = new_row(len(state["rows"]), h["row"].get("original") or {})
+            row = new_row(len(state["rows"]), t["row"].get("original") or {})
             state["rows"].append(row)
-        row["current"] = clean_current(h["row"].get("current") or row["current"])
-        row.pop("handed_off", None)
-        row.pop("published", None)
-        row["status"] = "pending"
-        row["handoff"] = info
+        tk = row.get("ticket") or {}
+        mine_edited = bool(tk) and row["current"] != tk.get("base")
+        if discard or not tk or row.get("ticketed") or row.get("released") or not mine_edited:
+            row["current"] = theirs or row["current"]  # the ticket's version
+            row["ticket"] = ticket_info(t, row["current"])
+            if discard and row.get("status") in ("approved", "denied"):
+                row["status"] = "pending"
+        else:  # keep my unshared edits; stale if the ticket moved on meanwhile
+            row["ticket"] = {**ticket_info(t, tk.get("base")), "stale": tk.get("version") != t["version"] or tk.get("stale", False)}
+        if not tk:
+            row["status"] = "pending"
+        for k in ("ticketed", "released", "published", "publish_error"):
+            row.pop(k, None)
         save_state(state)
     return jsonify({**state, "config": load_config(), "row_id": row["id"]})
 
@@ -1458,12 +1853,13 @@ def claim_hours():
 
 
 def claim_fmt():
-    return {"claims_table": tbl("claims"), "claim_hours": claim_hours(), "handoffs_table": tbl("handoffs")}
+    return {"claims_table": tbl("claims"), "claim_hours": claim_hours(), "tickets_table": tbl("tickets")}
 
 
 def ensure_claims():
-    """The shared claims and handoffs tables (created on first use)."""
-    for key, sql, fmt in (("claims", "claims_create", "claims_table"), ("handoffs", "handoff_create", "handoffs_table")):
+    """The shared claims and ticket tables (created on first use; the queue query needs them all)."""
+    for key, sql, fmt in (("claims", "claims_create", "claims_table"), ("tickets", "tickets_create", "tickets_table"),
+                          ("ticket_events", "ticket_events_create", "ticket_events_table")):
         t = tbl(key)
         if t not in _claims_ready:
             DB.write_file(sql, **{fmt: t})

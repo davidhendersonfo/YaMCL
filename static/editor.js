@@ -18,8 +18,8 @@ const industryNames = () => [...new Set([...Object.keys(S.cfg.industry_ids || {}
 // ------------------------------------------------------------------ mode switching
 
 // Three modes share the page: the review queue, the MCL editor and Add to MCL.
-const MODE_VIEWS = { editor: '#editor-view', add: '#add-view', stats: '#stats-view' };
-const MODE_TITLES = { editor: 'MCL editor', add: 'Add to MCL', stats: 'Stats' };
+const MODE_VIEWS = { editor: '#editor-view', tickets: '#tickets-view', add: '#add-view', stats: '#stats-view' };
+const MODE_TITLES = { editor: 'MCL editor', tickets: 'Tickets', add: 'Add to MCL', stats: 'Stats' };
 
 function setMode(mode) {
   S.mode = mode;
@@ -36,6 +36,7 @@ function setMode(mode) {
       document.title = MODE_TITLES[mode];
       if (mode === 'add') window.renderAdd?.();
       if (mode === 'stats') window.loadStats?.();
+      if (mode === 'tickets') window.showTickets?.();
     }
   } else {
     const v = S.reviewView || { view: S.rows.length ? 'work' : 'upload' };

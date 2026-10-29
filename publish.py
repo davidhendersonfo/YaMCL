@@ -42,7 +42,8 @@ def _sandbox_names(cfg, user=""):
 # ---------------------------------------------------------------- 1. plan
 
 def build_plan(state, cfg, db, tables, final_values, collapse, only_ids=None):
-    rows = [r for r in state["rows"] if not r.get("published") and not r.get("released") and not r.get("handed_off")
+    rows = [r for r in state["rows"] if not r.get("published") and not r.get("released") and not r.get("ticketed")
+            and not (r.get("ticket") or {}).get("closed")  # someone else already finished the ticket
             and (only_ids is None or r["id"] in only_ids)]
     approved = [r for r in rows if r["status"] == "approved"]
     denied = [r for r in rows if r["status"] == "denied"]

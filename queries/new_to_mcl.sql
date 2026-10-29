@@ -53,7 +53,7 @@ from (
   left anti join {claims_table} k  -- names someone is already working (claims expire after a while idle)
     on trim(a.partyname) = trim(k.partyname) and k.status = 'active'
        and k.last_activity > current_timestamp() - interval {claim_hours} hours
-  left anti join {handoffs_table} h  -- names waiting on someone in a handoff
+  left anti join {tickets_table} h  -- names the team is working out on an open ticket
     on trim(a.partyname) = trim(h.partyname) and h.status = 'open'
   where date(createdtime) >= current_date() - interval {days} days
     and createdtime not between '2026-01-09 19:00' and '2026-01-10 03:10'

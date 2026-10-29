@@ -29,7 +29,9 @@
       "industry_mapping": "analysts.datatools.industry_mapping",
       "change_log": "analysts.rhenderson.mcl_change_log",
       "claims": "analysts.rhenderson.mcl_queue_claims",
-      "handoffs": "analysts.rhenderson.mcl_handoffs"
+      "handoffs": "analysts.rhenderson.mcl_handoffs",
+      "tickets": "analysts.rhenderson.mcl_tickets",
+      "ticket_events": "analysts.rhenderson.mcl_ticket_events"
     }
   },
   "filterable": [

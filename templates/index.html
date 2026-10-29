@@ -12,6 +12,7 @@
     <div class="brand" title="YaMCL: yet another MCL (tool). Say it like yam-sicle, or don't."><span class="brand-yam" aria-hidden="true">🍠</span> YaMCL <span id="filename" class="muted"></span></div>
     <nav class="mode-tabs" id="mode-tabs" hidden>
       <button data-mode="review" class="on">Review queue</button>
+      <button data-mode="tickets">Tickets <span class="tab-count" id="tk-count" hidden></span></button>
       <button data-mode="editor">MCL editor</button>
       <button data-mode="add">Add to MCL</button>
       <button data-mode="stats">Stats</button>
@@ -23,10 +24,6 @@
     <button class="db-pill" id="db-pill" hidden></button>
     <button class="mode-badge" id="mode-badge" hidden title="How Publish works right now. Click to change it in Settings → Publishing."></button>
     <span class="others muted small" id="others" hidden></span>
-    <div class="inbox" id="inbox" hidden>
-      <button class="btn inbox-btn" id="inbox-btn"></button>
-      <div class="menu-list inbox-list" id="inbox-list" hidden></div>
-    </div>
     <div class="top-actions" id="top-actions" hidden>
       <span id="save-state" class="muted"></span>
       <button class="btn primary" id="btn-publish" hidden>Publish to MCL</button>
@@ -125,6 +122,16 @@
     <main class="entity" id="ed-main"></main>
   </div>
 
+  <!-- Tickets: the shared board -->
+  <div id="tickets-view" class="work-view" hidden>
+    <aside class="queue">
+      <div class="filters" id="tk-filters"></div>
+      <input id="tk-search" class="queue-search" placeholder="Search tickets (name or number)…" autocomplete="off">
+      <ol id="tk-list" class="queue-list tk-list"></ol>
+    </aside>
+    <main class="entity" id="tk-main"></main>
+  </div>
+
   <!-- Stats -->
   <main id="stats-view" class="add-view" hidden></main>
 
@@ -154,7 +161,7 @@
         <tr><td><kbd>F</kbd></td><td>Flag for a second look</td></tr>
         <tr><td><kbd>D</kbd></td><td>Deny</td></tr>
         <tr><td><kbd>U</kbd></td><td>Set back to pending</td></tr>
-        <tr><td><kbd>H</kbd></td><td>Ask someone (hand the row to a teammate)</td></tr>
+        <tr><td><kbd>H</kbd></td><td>Make the row a ticket (or reply, if it already is one)</td></tr>
         <tr><td><kbd>J</kbd> / <kbd>→</kbd></td><td>Next row</td></tr>
         <tr><td><kbd>K</kbd> / <kbd>←</kbd></td><td>Previous row</td></tr>
         <tr><td><kbd>W</kbd></td><td>Open the website from the LNT caller</td></tr>
@@ -195,14 +202,13 @@
 
   <div id="handoff" class="modal" hidden>
     <div class="modal-card handoff-card" role="dialog" aria-modal="true" aria-labelledby="ho-title">
-      <h3 id="ho-title">Ask someone</h3>
+      <h3 id="ho-title">Make it a ticket</h3>
       <p class="muted small" id="ho-sub"></p>
-      <label class="ho-field">To
-        <input id="ho-to" list="ho-people" placeholder="name@firstorion.com" autocomplete="off" spellcheck="false">
-        <datalist id="ho-people"></datalist></label>
+      <label class="ho-field">Whose turn is it?
+        <select id="ho-to"></select></label>
       <label class="ho-field">Note
         <textarea id="ho-note" rows="4" placeholder="What do you need? e.g. not sure if this is Health Care or Personal Services"></textarea></label>
-      <p class="muted small">Your edits travel with it, and it leaves your queue until it comes back.</p>
+      <p class="muted small">It moves out of your queue onto the Tickets board, with your edits. Anyone on the team can see it and add notes.</p>
       <div class="ho-actions">
         <button class="btn ghost" data-ho="cancel">Cancel</button>
         <button class="btn primary" data-ho="send">Send</button>
@@ -218,5 +224,6 @@
   <script src="{{ url_for('static', filename='add.js', v=v) }}"></script>
   <script src="{{ url_for('static', filename='stats.js', v=v) }}"></script>
   <script src="{{ url_for('static', filename='handoff.js', v=v) }}"></script>
+  <script src="{{ url_for('static', filename='tickets.js', v=v) }}"></script>
 </body>
 </html>
